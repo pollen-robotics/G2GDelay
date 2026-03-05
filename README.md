@@ -26,6 +26,16 @@ The original project targets the Arduino Mega 2560, which uses an AVR ATmega2560
 
 **Required library:** Install **"SAMD_TimerInterrupt"** by khoih-prog via the Arduino IDE Library Manager before compiling.
 
+### Running the Python Script with uv
+
+No manual dependency installation needed. If you have [`uv`](https://github.com/astral-sh/uv) installed, just run:
+
+```bash
+uv run delayrecorder.py
+```
+
+`uv` will automatically create an isolated environment and install `pyserial`, `numpy`, and `matplotlib` on the first run.
+
 ---
 
 ![Build](https://github.com/cbachhuber/G2GDelay/actions/workflows/build_arduino_code.yml/badge.svg)

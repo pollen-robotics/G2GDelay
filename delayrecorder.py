@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.8"
+# dependencies = [
+#   "pyserial",
+#   "numpy",
+#   "matplotlib",
+# ]
+# ///
 
 import sys
 import argparse
