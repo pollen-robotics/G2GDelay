@@ -76,14 +76,20 @@ def find_arduino_on_serial_port() -> serial.Serial:
     devices = serial.tools.list_ports.comports()
     for device in devices:
         if device.manufacturer is not None:
-            if "Arduino" in device.manufacturer:
-                print(f"Found Arduino at {device[0]}")
-                return serial.Serial(device[0], 115200, timeout=5)
+            if "Arduino" in device.manufacturer or "Seeed" in device.manufacturer:
+                print(
+                    f"Found device at {device.device}: {device.product or device.manufacturer}"
+                )
+                return serial.Serial(device.device, 115200, timeout=5)
 
-    raise ConnectionRefusedError("Did not find Arduino on any serial port. Is it connected?")
+    raise ConnectionRefusedError(
+        "Did not find Arduino or Seeed XIAO on any serial port. Is it connected?"
+    )
 
 
-def read_measurements_from_arduino(num_measurements: int, quiet_mode: bool) -> List[float]:
+def read_measurements_from_arduino(
+    num_measurements: int, quiet_mode: bool
+) -> List[float]:
     serial = find_arduino_on_serial_port()
 
     print(f"Collecting {num_measurements} measurements from the Arduino")
@@ -133,7 +139,9 @@ Is the screen brightness high enough (max recommended)?"""
     return measurements
 
 
-def write_measurements_to_csv(csv_file: Path, measurements: List[float], stats: Stats) -> None:
+def write_measurements_to_csv(
+    csv_file: Path, measurements: List[float], stats: Stats
+) -> None:
     with open(csv_file, "w") as f:
         writer = csv.writer(f)
         writer.writerow(["Samples", "Min", "Max", "Mean", "Median", "stdDev"])
@@ -177,9 +185,13 @@ def generate_stats(measurements: List[float]) -> Stats:
     median_delay = np.median(measurements_np)
     std_dev = np.std(measurements_np)
 
-    stats = Stats(len(measurements_np), min_delay, max_delay, mean_delay, median_delay, std_dev)
+    stats = Stats(
+        len(measurements_np), min_delay, max_delay, mean_delay, median_delay, std_dev
+    )
 
-    print(f"\nmin: {min_delay:.2f} ms | max: {max_delay:.2f} ms | median: {median_delay:.2f} ms")
+    print(
+        f"\nmin: {min_delay:.2f} ms | max: {max_delay:.2f} ms | median: {median_delay:.2f} ms"
+    )
     print(f"mean: {mean_delay:.2f} ms | std_dev: {std_dev:.2f} ms\n")
 
     return stats
@@ -212,7 +224,9 @@ def plot_results(measurements: List[float], stats: Stats, png_file: Path) -> Non
         horizontalalignment="left",
         bbox=props,
     )
-    textstr2 = "\n".join((r"$\mu=%.2f$" % (stats.mean_delay,), r"$\sigma=%.2f$" % (stats.std_dev,)))
+    textstr2 = "\n".join(
+        (r"$\mu=%.2f$" % (stats.mean_delay,), r"$\sigma=%.2f$" % (stats.std_dev,))
+    )
     # place it at position x=0.95, y=0.90, relative to the top and right of the box
     ax.text(
         0.95,

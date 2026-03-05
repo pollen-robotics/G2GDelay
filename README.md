@@ -1,4 +1,32 @@
-# Glass to Glass Delay Measurement System
+# Glass to Glass Delay Measurement System — Seeed XIAO SAMD21 Fork
+
+> **This is a fork of [cbachhuber/G2GDelay](https://github.com/cbachhuber/G2GDelay) adapted to run on the [Seeed XIAO SAMD21](https://wiki.seeedstudio.com/Seeeduino-XIAO/) microcontroller instead of the original Arduino Mega 2560.**
+
+## About This Fork
+
+The original project targets the Arduino Mega 2560, which uses an AVR ATmega2560 processor and relies on AVR-specific timer interrupt libraries. This fork ports the firmware to the **Seeed XIAO SAMD21**, a compact ARM Cortex-M0+ board, requiring a different approach to hardware timers and serial communication.
+
+### Summary of Changes
+
+| Area | Original (Mega 2560) | This Fork (XIAO SAMD21) |
+|---|---|---|
+| **MCU** | ATmega2560 (AVR, 8-bit) | ATSAMD21G18 (ARM Cortex-M0+, 32-bit) |
+| **Timer interrupt** | AVR-based `TimerOne` / `MsTimer2` | `SAMDTimerInterrupt` by khoih-prog (TC3) |
+| **Serial** | Hardware `Serial` / `Serial0` | USB CDC `Serial` (no `SerialUSB` alias needed) |
+| **Pin assignments** | Mega pin numbers | XIAO SAMD21 pin numbers (LED: D10, PT: A1, seed: A0) |
+| **Timer conflict workaround** | N/A | `ADAFRUIT_FEATHER_M0` defined to prevent library from redefining `Serial` as `SerialUSB` |
+| **Form factor** | Large (Mega shield) | Compact (21 × 17.5 mm) |
+
+**Key code changes in `Arduino_code/Arduino_code.ino`:**
+- Replaced AVR timer interrupt library with `SAMDTimerInterrupt` (TC3 peripheral, `TIMER_INTERVAL_US` period).
+- Added preprocessor guards (`ADAFRUIT_FEATHER_M0`, `USING_TIMER_TC3`, etc.) required by the SAMD_TimerInterrupt library on the XIAO SAMD21 core.
+- Updated pin constants for the XIAO SAMD21 pinout.
+- Replaced `micros()`-based LED on/off tracking with hardware timestamps; the rest of the detection logic is unchanged.
+- `setup_sampling_timer()` helper added to encapsulate timer initialisation and provide a clear error message if the library is not installed.
+
+**Required library:** Install **"SAMD_TimerInterrupt"** by khoih-prog via the Arduino IDE Library Manager before compiling.
+
+---
 
 ![Build](https://github.com/cbachhuber/G2GDelay/actions/workflows/build_arduino_code.yml/badge.svg)
 
@@ -9,7 +37,7 @@ There are three main components in this repository: the circuit layout (file [ci
 ## Construction Manual
 
 For building the measurement device, you need the following parts:
-- Arduino Mega 2560: Does not have to be original Arduino, can also be e.g. a SunFounder Mega 2560
+- Seeed XIAO SAMD21 (replaces the original Arduino Mega 2560 in this fork)
 - LED: A Light-emitting diode, e.g. LED 5-4500 RT
 - Phototransistor: For example the SDP 8406-003
 - Resistor 11kOhm: Any 11kOhm resistor will do the job, e.g. the 1/4W 11K

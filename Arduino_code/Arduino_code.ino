@@ -1,8 +1,21 @@
-#include "TimerOne.h"		// http://www.arduino.cc/playground/Code/Timer1
+// SAMD_TimerInterrupt library configuration — must come before the include
+#define TIMER_INTERRUPT_DEBUG         0
+#define _TIMERINTERRUPT_LOGLEVEL_     0
+#define USING_TIMER_TC3               true   // use TC3; TC4 conflicts with Servo, TCC2 can crash
+#define USING_TIMER_TC4               false
+#define USING_TIMER_TC5               false
+#define USING_TIMER_TCC               false
+#define USING_TIMER_TCC1              false
+#define USING_TIMER_TCC2              false
+// The Seeed XIAO core defines ARDUINO_SAMD_ZERO but does NOT have SerialUSB.
+// Defining ADAFRUIT_FEATHER_M0 here skips the library's "#define Serial SerialUSB" block,
+// which is guarded by: defined(ARDUINO_SAMD_ZERO) && !defined(ADAFRUIT_FEATHER_M0) && ...
+#define ADAFRUIT_FEATHER_M0
+#include "SAMDTimerInterrupt.h"      // Install "SAMD_TimerInterrupt" by khoih-prog via Library Manager
 
 /* PROGRAM OVERVIEW
   Conceptually, this program works as follows: parallel to the usual Arduino loop(), there runs
-  an interrupt loop (ISR()) at a user defined frequency (SAMPLING_RATE). The interrupt loop manages
+  an interrupt loop (samplingISR()) at a user defined frequency (SAMPLING_RATE). The interrupt loop manages
   turning on of the LED, records the resistance of the PT into the vector PT_voltages, and
   detects a sudden brightness increase (turning on LED visible at PT) at the PT. If this is
   detected, the interrupt loop sets flag_detected and records a time stamp. The main Arduino
@@ -18,16 +31,19 @@
 #define THRESH_ACC_SLOPES   20 // Minimum sample value increase to acknowledge a rising edge
 
 //Technical Options
-/* SAMPLING_RATE can be 1000,2000 or 8000 samples per second, defines system accuracy. Given a
+/* SAMPLING_RATE can be 1000, 2000 or 8000 samples per second, defines system accuracy. Given a
   maximum number of samples (NUM_SAMPLES) also defines maximum G2G delay that can be measured.
   2000 proved to be a good tradeoff between maximum measurable G2G delay and accuracy */
 #define SAMPLING_RATE    2000
 #define NUM_SAMPLES      2000  // Number of recorded samples during one msmt process. Do not change.
 #define TIME_BETWEEN      645  // Time between two measurements, in milliseconds. Do not change.
 
+// Timer interval in microseconds = 1,000,000 / SAMPLING_RATE
+#define TIMER_INTERVAL_US  (1000000 / SAMPLING_RATE)
+
 // Global variables
 unsigned int  PT_voltages[NUM_SAMPLES] = {0};  // Vector of voltages read from the pin_PT
-unsigned int  storage[CRT_WINDOW]  	   = {0};  // Vector of temporally stored samples for filtering
+unsigned int  storage[CRT_WINDOW + 1]  = {0};  // CRT_WINDOW+1: index 0..CRT_WINDOW used in shift loop
 byte          count_pos_slopes         = 0;  // Number of successive positive slope samples
 byte          acc_pos_slopes           = 0;  // Accumulated values of successive positive slope samples
 unsigned int  sample_counter           = 0;  // Must be zero to start sampling
@@ -36,16 +52,18 @@ bool          flag_detected            = LOW;  // Is set to true if the PT detec
 unsigned int  i_ledON;                         // Sample at which the LED is turned on. Will be random.
 unsigned int  i_ledOFF;                        // Sample at which the LED is turned off. Will be random.
 
-// Timestamps that will be measured with Timer1
-unsigned int  t_ledTrig                = 0;  // When the LED was triggered
-unsigned int  t_photoTransTrig         = 0;  // When a brightness increase was noted at the PT
+// Timestamps measured with micros()
+unsigned long  t_ledTrig                = 0;  // When the LED was triggered
+unsigned long  t_photoTransTrig         = 0;  // When a brightness increase was noted at the PT
 
-//Timer settings and pin assignments
-const unsigned int timer1_period     = 65535;  // timer period in microseconds, see http://playground.arduino.cc/code/timer1
-const unsigned int pin_LED              = 13;  // the index of the LED pin, see circuit.pdf
-const unsigned int pin_PT                = 5;  // PT analog input pin
+// Pin assignments (XIAO SAMD21)
+const unsigned int pin_LED              = 10;  // the index of the LED pin, see circuit.pdf
+const unsigned int pin_PT                = 1;  // PT analog input pin
 const unsigned int pin_Randomseed        = 0;  // Random seed for the time between measurements
 unsigned int randomSeedVal               = 0;  // Random value generated from multiple analog pin measurements
+
+// Hardware timer instance (TC3 on SAMD21)
+SAMDTimer ITimer(TIMER_TC3);
 
 void setup() {
   Serial.begin(115200);  // USB connection to PC
@@ -65,12 +83,11 @@ void setup() {
   i_ledON = random( 50, NUM_SAMPLES * 0.1 );  // Setting constrained random start time of the LED
   i_ledOFF = random( NUM_SAMPLES * 0.85, NUM_SAMPLES * 0.95 ); // Setting constrained random end time of the LED
 
-  setup_msmt_timer1();
-  setup_sampling_timer2();
+  setup_sampling_timer();
 }
 
-// This interrupt is called at the frequency defined in SAMPLING_RATE
-ISR(TIMER2_COMPA_vect) {
+// This interrupt callback is called at the frequency defined in SAMPLING_RATE
+void samplingISR() {
   if (sample_counter == 0)
   {
     PT_voltages[sample_counter] = 255;
@@ -81,7 +98,7 @@ ISR(TIMER2_COMPA_vect) {
     if (sample_counter == i_ledON)
     { // Turning on LED, recording time
       digitalWrite(pin_LED, HIGH);
-      t_ledTrig = Timer1.read();
+      t_ledTrig = micros();
     }
     else if (sample_counter == i_ledOFF)
     { // Turning off LED
@@ -137,17 +154,17 @@ ISR(TIMER2_COMPA_vect) {
         count_pos_slopes = 0;
         acc_pos_slopes   = 0;
 
-        t_photoTransTrig = Timer1.read();
+        t_photoTransTrig = micros();
         flag_detected = HIGH;
       }
     }
 
     sample_counter++;
 
-    // disable timer2 compare interrupt once the last sample of this frame is read
+    // disable sampling timer once the last sample of this frame is read
     if ( sample_counter == (NUM_SAMPLES - 1) )
     {
-      TIMSK2 &= ~(1 << OCIE2A);
+      ITimer.disableTimer();
       sampling_finished = HIGH;
     }
   }
@@ -168,15 +185,9 @@ void loop() {
     {
       if (flag_detected)
       {
-        float g2gDelay;
-        if (t_photoTransTrig > t_ledTrig)
-        { // Computing G2G delay. Multiplying with sample duration, subtracting system inherent delays from calibration
-          g2gDelay = (t_photoTransTrig - t_ledTrig) * 0.008 - 0.255;
-        }
-        else
-        { // In this case, a roll-over has taken place
-          g2gDelay = (65535 + t_photoTransTrig - t_ledTrig) * 0.008 - 0.255;
-        }
+        // Computing G2G delay. micros() difference gives microseconds, divide by 1000 for ms.
+        // Unsigned subtraction handles rollover correctly.
+        float g2gDelay = (t_photoTransTrig - t_ledTrig) / 1000.0f;
         Serial.println(g2gDelay);
       }
       flag_detected = LOW;
@@ -186,7 +197,7 @@ void loop() {
 
     sample_counter = 0;
     sampling_finished = LOW;
-    TIMSK2 |= (1 << OCIE2A);
+    ITimer.enableTimer();
 
     // Creating the random LED triggers
     i_ledON  = random( 50, NUM_SAMPLES * 0.1 );
@@ -195,68 +206,13 @@ void loop() {
 }
 
 
-void setup_msmt_timer1()
+void setup_sampling_timer()
 {
-  Timer1.initialize( timer1_period ); // Initializing the timer with the correct period
-  TCCR1B |= (1 << CS11) | (1 << CS10); // Assigning a prescale of 64: http://www.instructables.com/id/Arduino-Timer-Interrupts/step1/Prescalers-and-the-Compare-Match-Register/
-}
-
-
-void setup_sampling_timer2()
-{
-  // set timer2 interrupt at 8/2/1/0.25kHz
-  TCCR2A = 0; // set entire TCCR2A register to 0
-  TCCR2B = 0; // same for TCCR2B
-  TCNT2  = 0; // initialize counter value to 0
-
-  switch (SAMPLING_RATE)  // 250, 1000, 2000 or 8000 sampling rate in Hz
+  // Attach samplingISR at TIMER_INTERVAL_US microseconds (= 1,000,000 / SAMPLING_RATE Hz).
+  // Uses TC3 on SAMD21; requires "SAMD_TimerInterrupt" library by khoih-prog.
+  if (!ITimer.attachInterruptInterval(TIMER_INTERVAL_US, samplingISR))
   {
-    case 8000:
-      {
-        // set compare match register for 8khz increments
-        OCR2A = 249;// = (16*10^6) / (8000*8) - 1 (must be <256)
-        // turn on CTC mode
-        TCCR2A |= (1 << WGM21);
-        // 8 prescaler
-        TCCR2B |= (1 << CS21);
-        break;
-
-      }
-
-    case 2000:
-      {
-        // set compare match register for 2khz increments
-        OCR2A = 249;// = (16*10^6) / (2000*32) - 1 (must be <256)
-        // turn on CTC mode
-        TCCR2A |= (1 << WGM21);
-        // 32 prescaler
-        TCCR2B |= (1 << CS21) | (1 << CS20);
-        break;
-      }
-
-    case 1000:
-      {
-        // set compare match register for 1khz increments
-        OCR2A = 249;// = (16*10^6) / (1000*64) - 1 (must be <256)
-        // turn on CTC mode
-        TCCR2A |= (1 << WGM21);
-        // 32 prescaler
-        TCCR2B |= (1 << CS22);
-        break;
-      }
-
-    case 250:
-      {
-        // set compare match register for 250Hz increments
-        OCR2A = 249;// = (16*10^6) / (250*256) - 1 (must be <256)
-        // turn on CTC mode
-        TCCR2A |= (1 << WGM21);
-        // 32 prescaler
-        TCCR2B |= (1 << CS22) | (1 << CS21);
-        break;
-      }
+    Serial.println("ERROR: Failed to start sampling timer. Check SAMD_TimerInterrupt library install.");
+    while (true); // halt
   }
-
-  // enable timer compare interrupt
-  TIMSK2 |= (1 << OCIE2A);
 }
